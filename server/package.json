@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "setup-db": "node scripts/setup-database.js",
+    "reset-db": "dropdb pollifyDB && createdb pollifyDB && npm run setup-db"
   },
   "keywords": [],
   "author": "",
