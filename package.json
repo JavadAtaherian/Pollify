@@ -1,0 +1,28 @@
+{
+  "name": "pollify",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm start",
+    "install-server": "cd server && npm install",
+    "install-client": "cd client && npm install",
+    "install-all": "npm install && npm run install-server && npm run install-client"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JavadAtaherian/Pollify.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JavadAtaherian/Pollify/issues"
+  },
+  "homepage": "https://github.com/JavadAtaherian/Pollify#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}
