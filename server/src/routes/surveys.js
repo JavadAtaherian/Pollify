@@ -9,9 +9,12 @@ router.post('/', async (req, res) => {
       title: req.body.title,
       description: req.body.description,
       creator_id: req.body.creator_id, // In real app, get from JWT token
-      is_active: req.body.is_active || true,
-      allow_multiple_responses: req.body.allow_multiple_responses || false,
-      requires_login: req.body.requires_login || false
+      // Respect explicit boolean values from the client. Default to true for
+      // is_active when unspecified. Use double negation to cast to boolean
+      // for the other flags so undefined becomes false.
+      is_active: typeof req.body.is_active === 'boolean' ? req.body.is_active : true,
+      allow_multiple_responses: !!req.body.allow_multiple_responses,
+      requires_login: !!req.body.requires_login
     };
 
     const survey = await Survey.create(surveyData);

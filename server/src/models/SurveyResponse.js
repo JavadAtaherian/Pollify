@@ -80,6 +80,24 @@ class SurveyResponse {
       answers: answersResult.rows
     };
   }
+
+  /**
+   * Find a survey response by survey ID and respondent email. Returns the first
+   * matching response or null if none exist. This is used to enforce
+   * single-response-per-user when a survey does not allow multiple responses.
+   *
+   * @param {number} surveyId The survey ID
+   * @param {string} email The respondent email
+   */
+  static async findBySurveyAndEmail(surveyId, email) {
+    const query = `
+      SELECT * FROM survey_responses
+      WHERE survey_id = $1 AND respondent_email = $2
+      LIMIT 1
+    `;
+    const result = await pool.query(query, [surveyId, email]);
+    return result.rows[0] || null;
+  }
 }
 
 module.exports = SurveyResponse;
