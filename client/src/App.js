@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit, Trash2, Users, BarChart3, Settings, Home, PlusCircle } from 'lucide-react';
+import { Plus, Edit, Trash2, Users, BarChart3, Settings, Home, PlusCircle, Sliders, Link as LinkIcon } from 'lucide-react';
 
 // API Base URL
 const API_BASE = 'http://localhost:5000/api';
@@ -50,7 +50,179 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answers })
   }).then(r => r.json())
+  ,
+
+  // Conditions
+  // Fetch all conditions for a given survey. Returns the API response
+  // containing success flag and data array of condition objects.
+  getConditions: (surveyId) => fetch(`${API_BASE}/conditions/survey/${surveyId}`).then(r => r.json()),
+  // Create a new condition. Accepts an object containing survey_id,
+  // source_question_id, target_question_id, condition_type, condition_operator
+  // and condition_value. Returns the API response with the created condition.
+  createCondition: (data) => fetch(`${API_BASE}/conditions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }).then(r => r.json()),
+  // Delete an existing condition by its ID. Returns the API response.
+  deleteCondition: (id) => fetch(`${API_BASE}/conditions/${id}`, {
+    method: 'DELETE'
+  }).then(r => r.json())
 };
+
+// -----------------------------------------------------------------------------
+// Conditional logic helpers
+//
+// The backend already supports conditional logic on survey questions via
+// `question_conditions`. Each condition defines a `source_question_id` (the
+// question whose answer determines the condition), a `target_question_id`
+// (the question to show/hide), a `condition_type` ("show_if" or "hide_if"), a
+// `condition_operator` (e.g. "equals", "not_equals", etc.) and a
+// `condition_value` to compare against. The server processes these
+// conditions when computing survey visibility, but the original frontend
+// ignored them. To support conditional logic in the client we replicate the
+// evaluation functions from the backend here.
+
+// Types of condition actions. `SHOW_IF` means the target question is only
+// displayed when the condition evaluates to true. `HIDE_IF` means the target
+// question is hidden when the condition evaluates to true. `SKIP_TO` is not
+// currently implemented in the backend engine and thus treated as a no-op.
+const CONDITION_TYPES = {
+  SHOW_IF: 'show_if',
+  HIDE_IF: 'hide_if',
+  SKIP_TO: 'skip_to'
+};
+
+// Supported comparison operators. These mirror the operators defined in
+// `server/src/utils/validation.js` so that conditions created via the API
+// behave consistently in the browser.
+const CONDITION_OPERATORS = {
+  EQUALS: 'equals',
+  NOT_EQUALS: 'not_equals',
+  CONTAINS: 'contains',
+  NOT_CONTAINS: 'not_contains',
+  GREATER_THAN: 'greater_than',
+  LESS_THAN: 'less_than',
+  GREATER_EQUAL: 'greater_equal',
+  LESS_EQUAL: 'less_equal',
+  IS_EMPTY: 'is_empty',
+  IS_NOT_EMPTY: 'is_not_empty'
+};
+
+/**
+ * Evaluate a single condition against an answer. The answer is an object with
+ * `answer_value`, `answer_text` and `selected_options` (for checkbox
+ * questions). This implementation mirrors the backend implementation in
+ * `server/src/utils/conditionalLogic.js`.
+ *
+ * @param {Object} condition The condition to evaluate.
+ * @param {Object} answer The answer object for the source question.
+ * @returns {boolean} True if the condition is met, false otherwise.
+ */
+function evaluateCondition(condition, answer) {
+  const { condition_operator, condition_value } = condition;
+  const answerValue = answer?.answer_value ?? answer?.answer_text;
+  const answerOptions = answer?.selected_options ?? [];
+
+  switch (condition_operator) {
+    case CONDITION_OPERATORS.EQUALS:
+      return String(answerValue).toLowerCase() === String(condition_value).toLowerCase();
+    case CONDITION_OPERATORS.NOT_EQUALS:
+      return String(answerValue).toLowerCase() !== String(condition_value).toLowerCase();
+    case CONDITION_OPERATORS.CONTAINS:
+      if (Array.isArray(answerOptions) && answerOptions.length > 0) {
+        return answerOptions.some(opt => String(opt).toLowerCase().includes(String(condition_value).toLowerCase()));
+      }
+      return String(answerValue).toLowerCase().includes(String(condition_value).toLowerCase());
+    case CONDITION_OPERATORS.NOT_CONTAINS:
+      if (Array.isArray(answerOptions) && answerOptions.length > 0) {
+        return !answerOptions.some(opt => String(opt).toLowerCase().includes(String(condition_value).toLowerCase()));
+      }
+      return !String(answerValue).toLowerCase().includes(String(condition_value).toLowerCase());
+    case CONDITION_OPERATORS.GREATER_THAN: {
+      const numAnswer = Number(answerValue);
+      const numCond = Number(condition_value);
+      return !isNaN(numAnswer) && !isNaN(numCond) && numAnswer > numCond;
+    }
+    case CONDITION_OPERATORS.LESS_THAN: {
+      const numAnswer = Number(answerValue);
+      const numCond = Number(condition_value);
+      return !isNaN(numAnswer) && !isNaN(numCond) && numAnswer < numCond;
+    }
+    case CONDITION_OPERATORS.GREATER_EQUAL: {
+      const numAnswer = Number(answerValue);
+      const numCond = Number(condition_value);
+      return !isNaN(numAnswer) && !isNaN(numCond) && numAnswer >= numCond;
+    }
+    case CONDITION_OPERATORS.LESS_EQUAL: {
+      const numAnswer = Number(answerValue);
+      const numCond = Number(condition_value);
+      return !isNaN(numAnswer) && !isNaN(numCond) && numAnswer <= numCond;
+    }
+    case CONDITION_OPERATORS.IS_EMPTY:
+      if (Array.isArray(answerOptions) && answerOptions.length > 0) {
+        return answerOptions.length === 0;
+      }
+      return !answerValue || String(answerValue).trim() === '';
+    case CONDITION_OPERATORS.IS_NOT_EMPTY:
+      if (Array.isArray(answerOptions) && answerOptions.length > 0) {
+        return answerOptions.length > 0;
+      }
+      return !!(answerValue && String(answerValue).trim() !== '');
+    default:
+      return false;
+  }
+}
+
+/**
+ * Given a list of questions, answers and conditions, determine which
+ * questions should be visible. This mirrors the backend logic in
+ * `ConditionalLogicEngine.processConditionalLogic`. Answers should be an array
+ * of answer objects with a `question_id` property. Conditions should be an
+ * array of condition objects.
+ *
+ * @param {Array} questions The full list of survey questions.
+ * @param {Array} answers Array of answer objects keyed by question_id.
+ * @param {Array} conditions Array of condition objects.
+ * @returns {Array} A filtered array of questions that should be visible.
+ */
+function processConditionalLogic(questions, answers, conditions) {
+  const answerMap = new Map();
+  answers.forEach(ans => {
+    // Ensure answer has question_id before mapping
+    if (ans && typeof ans.question_id !== 'undefined') {
+      answerMap.set(ans.question_id, ans);
+    }
+  });
+
+  const visible = [];
+  questions.forEach(question => {
+    let shouldShow = true;
+    // Find all conditions that target this question
+    const relevant = conditions?.filter(c => c.target_question_id === question.id) || [];
+    for (const condition of relevant) {
+      const sourceAnswer = answerMap.get(condition.source_question_id);
+      if (sourceAnswer) {
+        const conditionMet = evaluateCondition(condition, sourceAnswer);
+        if (condition.condition_type === CONDITION_TYPES.SHOW_IF) {
+          shouldShow = shouldShow && conditionMet;
+        } else if (condition.condition_type === CONDITION_TYPES.HIDE_IF) {
+          shouldShow = shouldShow && !conditionMet;
+        }
+      } else {
+        // If there is no answer to the source question and the condition is SHOW_IF,
+        // the target should be hidden until the answer exists.
+        if (condition.condition_type === CONDITION_TYPES.SHOW_IF) {
+          shouldShow = false;
+        }
+      }
+    }
+    if (shouldShow) {
+      visible.push(question);
+    }
+  });
+  return visible;
+}
 
 // Question Types
 const QUESTION_TYPES = [
@@ -75,6 +247,20 @@ function App() {
   const [selectedSurvey, setSelectedSurvey] = useState(null);
   const [surveys, setSurveys] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // Determine if the app is being accessed via a public survey URL.
+  const [isPublic, setIsPublic] = useState(false);
+
+  // Check the URL on mount to see if we should display a public survey view.
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/survey\/(\d+)/);
+    if (match) {
+      const id = Number(match[1]);
+      setIsPublic(true);
+      setSelectedSurvey({ id });
+      setCurrentView('take');
+    }
+  }, []);
 
   useEffect(() => {
     loadSurveys();
@@ -164,8 +350,21 @@ function App() {
         return (
           <TakeSurvey 
             survey={selectedSurvey}
-            onComplete={() => setCurrentView('dashboard')}
+            onComplete={() => {
+              if (isPublic) {
+                setCurrentView('publicComplete');
+              } else {
+                setCurrentView('dashboard');
+              }
+            }}
           />
+        );
+      case 'publicComplete':
+        return (
+          <div className="max-w-2xl mx-auto text-center py-20">
+            <h1 className="text-2xl font-semibold text-gray-900 mb-4">Thank you!</h1>
+            <p className="text-gray-600">Your response has been recorded.</p>
+          </div>
         );
       default:
         return <Dashboard surveys={surveys} />;
@@ -174,33 +373,34 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
-      <nav className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <div className="text-2xl font-bold text-blue-600">Pollify</div>
-              <div className="hidden md:block ml-10">
-                <div className="flex items-baseline space-x-4">
-                  <button
-                    onClick={() => setCurrentView('dashboard')}
-                    className={`px-3 py-2 rounded-md text-sm font-medium ${
-                      currentView === 'dashboard' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    <Home className="w-4 h-4 inline mr-2" />
-                    Dashboard
-                  </button>
+      {/* Navigation: hidden in public survey mode */}
+      {!isPublic && (
+        <nav className="bg-white shadow-sm border-b">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center">
+                <div className="text-2xl font-bold text-blue-600">Pollify</div>
+                <div className="hidden md:block ml-10">
+                  <div className="flex items-baseline space-x-4">
+                    <button
+                      onClick={() => setCurrentView('dashboard')}
+                      className={`px-3 py-2 rounded-md text-sm font-medium ${
+                        currentView === 'dashboard' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <Home className="w-4 h-4 inline mr-2" />
+                      Dashboard
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-500">Welcome, {MOCK_USER.name}</span>
+              <div className="flex items-center space-x-4">
+                <span className="text-sm text-gray-500">Welcome, {MOCK_USER.name}</span>
+              </div>
             </div>
           </div>
-        </div>
-      </nav>
-
+        </nav>
+      )}
       {/* Main Content */}
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {renderContent()}
@@ -293,7 +493,7 @@ function SurveyCard({ survey, onEdit, onViewResponses, onDelete }) {
   const [showMenu, setShowMenu] = useState(false);
 
   return (
-    <div className="bg-white overflow-hidden shadow rounded-lg hover:shadow-md transition-shadow">
+    <div className="bg-white shadow rounded-lg hover:shadow-md transition-shadow relative overflow-visible">
       <div className="p-6">
         <div className="flex items-center justify-between">
           <div className="flex-1 min-w-0">
@@ -312,7 +512,15 @@ function SurveyCard({ survey, onEdit, onViewResponses, onDelete }) {
               <Settings className="w-4 h-4" />
             </button>
             {showMenu && (
-              <div className="absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-10">
+              /*
+                The context menu drops down from the gear icon. In some
+                scenarios the menu would be clipped by ancestor elements with
+                overflow settings, making the last option inaccessible. To
+                ensure it can be fully scrolled into view we apply a max
+                height and enable scrolling. A high z-index keeps it above
+                other content.
+              */
+              <div className="absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50 max-h-60 overflow-y-auto">
                 <div className="py-1">
                   <button
                     onClick={() => { onEdit(); setShowMenu(false); }}
@@ -329,11 +537,24 @@ function SurveyCard({ survey, onEdit, onViewResponses, onDelete }) {
                     View Responses
                   </button>
                   <button
-                    onClick={() => { 
+                    onClick={() => {
+                      const url = `${window.location.origin}/survey/${survey.id}`;
+                      navigator.clipboard.writeText(url).then(() => {
+                        alert('Survey link copied to clipboard');
+                      });
+                      setShowMenu(false);
+                    }}
+                    className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    <LinkIcon className="w-4 h-4 mr-3" />
+                    Copy Link
+                  </button>
+                  <button
+                    onClick={() => {
                       if (window.confirm('Are you sure you want to delete this survey?')) {
                         onDelete();
                       }
-                      setShowMenu(false); 
+                      setShowMenu(false);
                     }}
                     className="flex items-center w-full px-4 py-2 text-sm text-red-700 hover:bg-red-50"
                   >
@@ -499,6 +720,10 @@ function SurveyBuilder({ survey, onBack, onSurveyUpdated }) {
   const [questions, setQuestions] = useState([]);
   const [showAddQuestion, setShowAddQuestion] = useState(false);
 
+  // State for conditional logic modal
+  const [conditionModalOpen, setConditionModalOpen] = useState(false);
+  const [conditionQuestion, setConditionQuestion] = useState(null);
+
   const loadSurveyData = useCallback(async () => {
     if (!survey?.id) return;
     
@@ -518,6 +743,20 @@ function SurveyBuilder({ survey, onBack, onSurveyUpdated }) {
   useEffect(() => {
     loadSurveyData();
   }, [loadSurveyData]);
+
+  // Handler invoked when the user wants to manage conditions for a specific question
+  const handleManageConditions = (question) => {
+    setConditionQuestion(question);
+    setConditionModalOpen(true);
+  };
+
+  // Callback passed to the condition modal when conditions have been added or removed.
+  // It reloads the survey data to reflect the latest conditions and closes the modal.
+  const handleConditionsUpdated = async () => {
+    await loadSurveyData();
+    setConditionModalOpen(false);
+    setConditionQuestion(null);
+  };
 
   const handleAddQuestion = async (questionData) => {
     try {
@@ -578,6 +817,58 @@ function SurveyBuilder({ survey, onBack, onSurveyUpdated }) {
         </button>
       </div>
 
+      {/* Survey level settings */}
+      {surveyData && (
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <h3 className="text-md font-medium text-gray-900 mb-2">Survey Settings</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-6 space-y-3 sm:space-y-0">
+            {/* Require login toggle */}
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={!!surveyData.requires_login}
+                onChange={async (e) => {
+                  const newValue = e.target.checked;
+                  try {
+                    const result = await api.updateSurvey(survey.id, { requires_login: newValue });
+                    if (result.success) {
+                      setSurveyData(result.data);
+                      // Inform parent that survey has been updated so list refreshes
+                      onSurveyUpdated && onSurveyUpdated();
+                    }
+                  } catch (error) {
+                    console.error('Failed to update requires_login:', error);
+                  }
+                }}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <span className="ml-2 text-sm text-gray-700">Require login to respond</span>
+            </label>
+            {/* Allow multiple responses toggle */}
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={!!surveyData.allow_multiple_responses}
+                onChange={async (e) => {
+                  const newValue = e.target.checked;
+                  try {
+                    const result = await api.updateSurvey(survey.id, { allow_multiple_responses: newValue });
+                    if (result.success) {
+                      setSurveyData(result.data);
+                      onSurveyUpdated && onSurveyUpdated();
+                    }
+                  } catch (error) {
+                    console.error('Failed to update allow_multiple_responses:', error);
+                  }
+                }}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <span className="ml-2 text-sm text-gray-700">Allow multiple responses per user</span>
+            </label>
+          </div>
+        </div>
+      )}
+
       {/* Questions List */}
       <div className="space-y-4">
         {questions.length === 0 ? (
@@ -594,14 +885,20 @@ function SurveyBuilder({ survey, onBack, onSurveyUpdated }) {
             </button>
           </div>
         ) : (
-          questions.map((question, index) => (
-            <QuestionCard
-              key={question.id}
-              question={question}
-              index={index}
-              onDelete={() => handleDeleteQuestion(question.id)}
-            />
-          ))
+          questions.map((question, index) => {
+            // Determine if this question has any conditions targeting it
+            const questionConditions = surveyData?.conditions?.filter(c => c.target_question_id === question.id) || [];
+            return (
+              <QuestionCard
+                key={question.id}
+                question={question}
+                index={index}
+                onDelete={() => handleDeleteQuestion(question.id)}
+                conditionsForQuestion={questionConditions}
+                onManageConditions={() => handleManageConditions(question)}
+              />
+            );
+          })
         )}
       </div>
 
@@ -612,12 +909,31 @@ function SurveyBuilder({ survey, onBack, onSurveyUpdated }) {
           onClose={() => setShowAddQuestion(false)}
         />
       )}
+
+      {/* Conditional Logic Modal */}
+      {conditionModalOpen && conditionQuestion && (
+        <ConditionModal
+          surveyId={survey.id}
+          question={conditionQuestion}
+          questions={questions}
+          conditions={surveyData?.conditions?.filter(c => c.target_question_id === conditionQuestion.id) || []}
+          onClose={() => {
+            setConditionModalOpen(false);
+            setConditionQuestion(null);
+          }}
+          onConditionsUpdated={handleConditionsUpdated}
+        />
+      )}
     </div>
   );
 }
 
 // Question Card Component
-function QuestionCard({ question, index, onDelete }) {
+// Displays an individual question in the survey builder. If conditional logic
+// exists for this question (conditionsForQuestion.length > 0) a small
+// indicator is shown. A button allows opening a modal to add or edit
+// conditions via the onManageConditions callback.
+function QuestionCard({ question, index, onDelete, conditionsForQuestion = [], onManageConditions }) {
   const questionType = QUESTION_TYPES.find(type => type.value === question.question_type);
 
   return (
@@ -633,6 +949,12 @@ function QuestionCard({ question, index, onDelete }) {
               {question.is_required && (
                 <span className="ml-2 text-xs bg-red-100 text-red-800 px-2 py-1 rounded">
                   Required
+                </span>
+              )}
+              {/* Show indicator if this question has conditional logic applied */}
+              {conditionsForQuestion && conditionsForQuestion.length > 0 && (
+                <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                  Conditional
                 </span>
               )}
             </div>
@@ -655,6 +977,14 @@ function QuestionCard({ question, index, onDelete }) {
             )}
           </div>
           <div className="flex items-center space-x-2 ml-4">
+            {/* Button to manage conditional logic for this question */}
+            <button
+              onClick={() => onManageConditions()}
+              className="p-2 text-gray-400 hover:text-blue-600"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+            {/* Delete question */}
             <button
               onClick={() => onDelete()}
               className="p-2 text-gray-400 hover:text-red-600"
@@ -826,6 +1156,200 @@ function AddQuestionModal({ onAdd, onClose }) {
   );
 }
 
+// Condition Modal Component
+// Allows users to add and manage conditional logic rules for a specific question.
+function ConditionModal({ surveyId, question, questions, conditions, onClose, onConditionsUpdated }) {
+  const [sourceQuestionId, setSourceQuestionId] = useState('');
+  const [conditionType, setConditionType] = useState(CONDITION_TYPES.SHOW_IF);
+  const [conditionOperator, setConditionOperator] = useState(CONDITION_OPERATORS.EQUALS);
+  const [conditionValue, setConditionValue] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Determine whether the currently selected operator requires a comparison value.
+  const requiresValue = ![
+    CONDITION_OPERATORS.IS_EMPTY,
+    CONDITION_OPERATORS.IS_NOT_EMPTY
+  ].includes(conditionOperator);
+
+  // Only allow selecting questions that appear before the target question to avoid circular dependencies
+  const orderedQuestions = questions.slice().sort((a, b) => a.order_index - b.order_index);
+  const targetIndex = orderedQuestions.findIndex(q => q.id === question.id);
+  const possibleSources = orderedQuestions.filter((q, idx) => idx < targetIndex);
+
+  const handleAddCondition = async (e) => {
+    e.preventDefault();
+    // Determine if a value is required based on the selected operator
+    const requiresValue = ![
+      CONDITION_OPERATORS.IS_EMPTY,
+      CONDITION_OPERATORS.IS_NOT_EMPTY
+    ].includes(conditionOperator);
+    // Validate required fields
+    if (!sourceQuestionId || (requiresValue && !conditionValue)) return;
+    setSubmitting(true);
+    try {
+      // For operators that do not require a value, send a placeholder so the
+      // server-side validation passes. The backend ignores this value when
+      // evaluating IS_EMPTY and IS_NOT_EMPTY.
+      const valueToSend = requiresValue ? conditionValue : (conditionValue || '__n/a__');
+      const result = await api.createCondition({
+        survey_id: surveyId,
+        source_question_id: Number(sourceQuestionId),
+        target_question_id: question.id,
+        condition_type: conditionType,
+        condition_operator: conditionOperator,
+        condition_value: valueToSend
+      });
+      if (result.success) {
+        setSourceQuestionId('');
+        setConditionType(CONDITION_TYPES.SHOW_IF);
+        setConditionOperator(CONDITION_OPERATORS.EQUALS);
+        setConditionValue('');
+        await onConditionsUpdated();
+      } else {
+        console.error('Failed to create condition');
+      }
+    } catch (error) {
+      console.error('Error creating condition:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteCondition = async (conditionId) => {
+    try {
+      await api.deleteCondition(conditionId);
+      await onConditionsUpdated();
+    } catch (error) {
+      console.error('Error deleting condition:', error);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto p-6">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">
+          Conditional Logic for Question
+        </h3>
+
+        {/* Existing conditions list */}
+        {conditions && conditions.length > 0 && (
+          <div className="mb-6 space-y-2">
+            {conditions.map((cond) => {
+              const sourceQ = questions.find(q => q.id === cond.source_question_id);
+              return (
+                <div key={cond.id} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded">
+                  <div className="text-sm text-gray-700">
+                    {cond.condition_type === CONDITION_TYPES.SHOW_IF ? 'Show' : cond.condition_type === CONDITION_TYPES.HIDE_IF ? 'Hide' : 'Skip'} if
+                    {' '}
+                    <span className="font-medium">{sourceQ?.question_text || 'Q' + cond.source_question_id}</span>
+                    {' '}
+                    {cond.condition_operator.replace(/_/g, ' ')}
+                    {' '}
+                    <span className="font-medium">"{cond.condition_value}"</span>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteCondition(cond.id)}
+                    className="p-1 text-red-600 hover:text-red-800"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Form to add new condition */}
+        <form onSubmit={handleAddCondition} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Source Question
+            </label>
+            <select
+              value={sourceQuestionId}
+              onChange={(e) => setSourceQuestionId(e.target.value)}
+              className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            >
+              <option value="">Select a question...</option>
+              {possibleSources.map(q => (
+                <option key={q.id} value={q.id}>
+                  {q.question_text.length > 30 ? q.question_text.slice(0, 30) + '...' : q.question_text}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex space-x-2">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Condition Type
+              </label>
+              <select
+                value={conditionType}
+                onChange={(e) => setConditionType(e.target.value)}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                {Object.values(CONDITION_TYPES)
+                  .filter(t => t !== CONDITION_TYPES.SKIP_TO)
+                  .map(t => (
+                    <option key={t} value={t}>
+                      {t.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Operator
+              </label>
+              <select
+                value={conditionOperator}
+                onChange={(e) => setConditionOperator(e.target.value)}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                {Object.values(CONDITION_OPERATORS).map(op => (
+                  <option key={op} value={op}>
+                    {op.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {requiresValue && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Value
+              </label>
+              <input
+                type="text"
+                value={conditionValue}
+                onChange={(e) => setConditionValue(e.target.value)}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                placeholder="Enter value to compare..."
+              />
+            </div>
+          )}
+          <div className="flex justify-end space-x-3 pt-4 border-t">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50"
+            >
+              Close
+            </button>
+            <button
+              type="submit"
+              disabled={submitting || !sourceQuestionId || (requiresValue && !conditionValue)}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50"
+            >
+              {submitting ? 'Adding...' : 'Add Condition'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // Responses View Component
 function ResponsesView({ survey, onBack }) {
   const [responses, setResponses] = useState([]);
@@ -949,11 +1473,24 @@ function ResponsesView({ survey, onBack }) {
 // Take Survey Component
 function TakeSurvey({ survey, onComplete }) {
   const [surveyData, setSurveyData] = useState(null);
+  // Index in the list of currently visible questions
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  // Map of answers keyed by question ID. Each value contains the answer object
+  // with properties: question_id, answer_text, answer_value and selected_options.
   const [answers, setAnswers] = useState({});
+  // Computed list of questions that should be visible based on the current
+  // answers and defined conditions. When no conditions are provided, this will
+  // mirror `surveyData.questions`.
+  const [visibleQuestions, setVisibleQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [responseId, setResponseId] = useState(null);
+
+  // Email and login management for surveys that require login
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [emailSubmitting, setEmailSubmitting] = useState(false);
+  const [responseStarted, setResponseStarted] = useState(false);
 
   const loadSurveyAndStart = useCallback(async () => {
     if (!survey?.id) return;
@@ -963,14 +1500,22 @@ function TakeSurvey({ survey, onComplete }) {
       const surveyResult = await api.getSurvey(survey.id);
       if (surveyResult.success) {
         setSurveyData(surveyResult.data);
-        
-        // Start response
-        const responseResult = await api.startResponse({
-          survey_id: survey.id,
-          respondent_email: null // Anonymous for now
-        });
-        if (responseResult.success) {
-          setResponseId(responseResult.data.id);
+        // If the survey does not require login, start the response immediately
+        if (!surveyResult.data.requires_login) {
+          const responseResult = await api.startResponse({
+            survey_id: survey.id,
+            respondent_email: null
+          });
+          if (responseResult.success) {
+            setResponseId(responseResult.data.id);
+            setResponseStarted(true);
+          } else {
+            // If the server rejects, show error in console
+            console.error('Failed to start survey response');
+          }
+        } else {
+          // Requires login: wait for user to enter email
+          setResponseStarted(false);
         }
       }
     } catch (error) {
@@ -983,6 +1528,26 @@ function TakeSurvey({ survey, onComplete }) {
   useEffect(() => {
     loadSurveyAndStart();
   }, [loadSurveyAndStart]);
+
+  // Recompute visible questions whenever the survey data or answers change.
+  useEffect(() => {
+    if (!surveyData) return;
+    const answerArray = Object.values(answers);
+    // Use the backend-like engine to determine which questions to show
+    const vis = processConditionalLogic(
+      surveyData.questions || [],
+      answerArray,
+      surveyData.conditions || []
+    );
+    setVisibleQuestions(vis);
+    // Adjust current index if it falls outside of the newly computed list
+    setCurrentQuestionIndex(prevIndex => {
+      if (vis.length === 0) return 0;
+      if (prevIndex >= vis.length) return vis.length - 1;
+      if (prevIndex < 0) return 0;
+      return prevIndex;
+    });
+  }, [surveyData, answers]);
 
   const handleAnswer = (questionId, value, selectedOptions = null) => {
     setAnswers({
@@ -997,7 +1562,7 @@ function TakeSurvey({ survey, onComplete }) {
   };
 
   const handleNext = () => {
-    if (currentQuestionIndex < surveyData.questions.length - 1) {
+    if (currentQuestionIndex < visibleQuestions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
     }
   };
@@ -1032,19 +1597,78 @@ function TakeSurvey({ survey, onComplete }) {
     );
   }
 
-  if (!surveyData || !surveyData.questions.length) {
+  // If the survey requires login and the response has not been started yet,
+  // prompt the user for their email address before beginning the survey.
+  if (surveyData && surveyData.requires_login && !responseStarted) {
     return (
-      <div className="text-center py-12">
-        <div className="text-gray-400 text-4xl mb-4">❓</div>
-        <h3 className="text-lg font-medium text-gray-900 mb-2">Survey not available</h3>
-        <p className="text-gray-500">This survey has no questions or is not active</p>
+      <div className="max-w-md mx-auto bg-white shadow rounded-lg p-6">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Start Survey</h2>
+        <p className="text-sm text-gray-600 mb-4">This survey requires an email address to participate.</p>
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            placeholder="you@example.com"
+          />
+          {emailError && (
+            <p className="text-red-500 text-sm mt-1">{emailError}</p>
+          )}
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={async () => {
+              // Basic email validation
+              setEmailError('');
+              const emailPattern = /.+@.+\..+/;
+              if (!emailPattern.test(email)) {
+                setEmailError('Please enter a valid email');
+                return;
+              }
+              setEmailSubmitting(true);
+              try {
+                const responseResult = await api.startResponse({
+                  survey_id: survey.id,
+                  respondent_email: email
+                });
+                if (responseResult.success) {
+                  setResponseId(responseResult.data.id);
+                  setResponseStarted(true);
+                } else {
+                  setEmailError(responseResult.error || 'Unable to start the survey');
+                }
+              } catch (error) {
+                setEmailError('An error occurred. Please try again later.');
+              } finally {
+                setEmailSubmitting(false);
+              }
+            }}
+            disabled={emailSubmitting || !email}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            {emailSubmitting ? 'Starting...' : 'Start Survey'}
+          </button>
+        </div>
       </div>
     );
   }
 
-  const currentQuestion = surveyData.questions[currentQuestionIndex];
-  const isLastQuestion = currentQuestionIndex === surveyData.questions.length - 1;
-  const progress = ((currentQuestionIndex + 1) / surveyData.questions.length) * 100;
+  // If there are no survey data or no visible questions, show a message.
+  if (!surveyData || visibleQuestions.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-gray-400 text-4xl mb-4">❓</div>
+        <h3 className="text-lg font-medium text-gray-900 mb-2">Survey not available</h3>
+        <p className="text-gray-500">This survey has no questions available to display</p>
+      </div>
+    );
+  }
+
+  const currentQuestion = visibleQuestions[currentQuestionIndex];
+  const isLastQuestion = currentQuestionIndex === visibleQuestions.length - 1;
+  const progress = ((currentQuestionIndex + 1) / visibleQuestions.length) * 100;
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-0">
@@ -1059,7 +1683,7 @@ function TakeSurvey({ survey, onComplete }) {
           {/* Progress Bar */}
           <div className="mt-4">
             <div className="flex justify-between text-sm text-gray-500 mb-1">
-              <span>Question {currentQuestionIndex + 1} of {surveyData.questions.length}</span>
+              <span>Question {currentQuestionIndex + 1} of {visibleQuestions.length}</span>
               <span>{Math.round(progress)}% complete</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
