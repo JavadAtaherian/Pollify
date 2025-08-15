@@ -106,6 +106,80 @@ router.get('/survey/:survey_id/detailed', async (req, res) => {
   }
 });
 
+// Export all responses for a survey as CSV
+router.get('/survey/:survey_id/export', async (req, res) => {
+  try {
+    const surveyId = req.params.survey_id;
+    // Load survey with questions
+    const survey = await Survey.getSurveyWithQuestions(surveyId);
+    if (!survey) {
+      return res.status(404).json({ success: false, error: 'Survey not found' });
+    }
+    // Load detailed responses including answers
+    const responses = await SurveyResponse.findDetailedBySurvey(surveyId);
+    // Generate CSV header: fixed respondent fields + question texts
+    const header = [
+      'Respondent Name',
+      'Respondent Email',
+      'Started At',
+      'Completed At',
+      'Status',
+      ...survey.questions.map((q) => q.question_text)
+    ];
+    // Helper to escape CSV values
+    const escapeCsv = (value) => {
+      if (value === null || value === undefined) return '';
+      const string = String(value).replace(/"/g, '""');
+      if (/[",\n]/.test(string)) {
+        return `"${string}"`;
+      }
+      return string;
+    };
+    // Build rows
+    const rows = responses.map((resp) => {
+      const row = [];
+      // Respondent name/email and timestamps
+      row.push(resp.respondent_name || resp.respondent_email || 'Anonymous');
+      row.push(resp.respondent_email || '');
+      row.push(resp.started_at);
+      row.push(resp.completed_at || '');
+      row.push(resp.is_complete ? 'Completed' : 'In Progress');
+      // Answers per question (in order)
+      survey.questions.forEach((q) => {
+        const ans = resp.answers?.find((a) => a.question_id === q.id);
+        let val = '';
+        if (ans) {
+          if (ans.selected_options && ans.selected_options.length > 0) {
+            try {
+              const opts = Array.isArray(ans.selected_options)
+                ? ans.selected_options
+                : JSON.parse(ans.selected_options);
+              val = opts.join('; ');
+            } catch (e) {
+              val = ans.selected_options;
+            }
+          } else if (ans.answer_value) {
+            val = ans.answer_value;
+          } else if (ans.answer_text) {
+            val = ans.answer_text;
+          }
+        }
+        row.push(val);
+      });
+      return row;
+    });
+    const csvLines = [header, ...rows].map((row) => row.map(escapeCsv).join(','));
+    const csvContent = csvLines.join('\n');
+    // Set headers for file download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="survey_${surveyId}_responses.csv"`);
+    return res.send(csvContent);
+  } catch (error) {
+    console.error('Export responses error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to export survey responses' });
+  }
+});
+
 // Get specific response with answers
 router.get('/:id', async (req, res) => {
   try {

@@ -75,6 +75,12 @@ const api = {
   // question_id, answer_text, answer_value and selected_options. Use this
   // endpoint to build tables of survey results.
   getDetailedResponses: (surveyId) => fetch(`${API_BASE}/responses/survey/${surveyId}/detailed`).then(r => r.json())
+  ,
+  // Export responses for a survey as a CSV file. Returns a Blob for download.
+  exportResponses: (surveyId) => fetch(`${API_BASE}/responses/survey/${surveyId}/export`).then(async (r) => {
+    if (!r.ok) throw new Error('Failed to export');
+    return await r.blob();
+  })
 };
 
 // -----------------------------------------------------------------------------
@@ -1598,8 +1604,8 @@ function ResponsesView({ survey, onBack }) {
               </tbody>
             </table>
           </div>
-          {/* Button group to toggle answers and charts */}
-          <div className="mt-6 flex space-x-4">
+          {/* Button group to toggle answers, charts and export */}
+          <div className="mt-6 flex flex-wrap gap-4">
             <button
               onClick={() => setShowAnswers(!showAnswers)}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700"
@@ -1611,6 +1617,28 @@ function ResponsesView({ survey, onBack }) {
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700"
             >
               {showCharts ? 'Hide Charts' : 'Show Charts'}
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const blob = await api.exportResponses(survey.id);
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  // Replace spaces with underscores for filename
+                  const safeTitle = survey.title ? survey.title.replace(/\s+/g, '_').toLowerCase() : `survey_${survey.id}`;
+                  a.download = `${safeTitle}_responses.csv`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                } catch (error) {
+                  alert('Failed to export responses');
+                }
+              }}
+              className="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md shadow-sm hover:bg-green-700"
+            >
+              Export CSV
             </button>
           </div>
           {/* Detailed answers table */}
