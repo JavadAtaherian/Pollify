@@ -89,6 +89,23 @@ router.get('/survey/:survey_id', async (req, res) => {
   }
 });
 
+// Get detailed responses for a survey (including answers)
+router.get('/survey/:survey_id/detailed', async (req, res) => {
+  try {
+    const responses = await SurveyResponse.findDetailedBySurvey(req.params.survey_id);
+    res.json({
+      success: true,
+      data: responses
+    });
+  } catch (error) {
+    console.error('Get detailed responses error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch detailed responses'
+    });
+  }
+});
+
 // Get specific response with answers
 router.get('/:id', async (req, res) => {
   try {

@@ -82,6 +82,39 @@ class SurveyResponse {
   }
 
   /**
+   * Return all survey responses for a survey along with each answer for the
+   * associated questions. The results include respondent name/email and an
+   * array of answers for each response. Answers are returned in the order
+   * they appear in the survey (by question order).
+   *
+   * @param {number} surveyId The survey ID
+   */
+  static async findDetailedBySurvey(surveyId) {
+    const query = `
+      SELECT sr.*, u.name as respondent_name,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'question_id', qa.question_id,
+                   'answer_text', qa.answer_text,
+                   'answer_value', qa.answer_value,
+                   'selected_options', qa.selected_options
+                 ) ORDER BY qa.question_id
+               ) FILTER (WHERE qa.id IS NOT NULL),
+               '[]'::json
+             ) as answers
+      FROM survey_responses sr
+      LEFT JOIN question_answers qa ON sr.id = qa.response_id
+      LEFT JOIN users u ON sr.respondent_id = u.id
+      WHERE sr.survey_id = $1
+      GROUP BY sr.id, u.name
+      ORDER BY sr.started_at
+    `;
+    const result = await pool.query(query, [surveyId]);
+    return result.rows;
+  }
+
+  /**
    * Find a survey response by survey ID and respondent email. Returns the first
    * matching response or null if none exist. This is used to enforce
    * single-response-per-user when a survey does not allow multiple responses.

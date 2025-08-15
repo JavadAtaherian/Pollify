@@ -68,6 +68,13 @@ const api = {
   deleteCondition: (id) => fetch(`${API_BASE}/conditions/${id}`, {
     method: 'DELETE'
   }).then(r => r.json())
+
+  ,
+  // Fetch detailed responses for a survey including all answers. This returns
+  // an array of response objects with an `answers` array containing
+  // question_id, answer_text, answer_value and selected_options. Use this
+  // endpoint to build tables of survey results.
+  getDetailedResponses: (surveyId) => fetch(`${API_BASE}/responses/survey/${surveyId}/detailed`).then(r => r.json())
 };
 
 // -----------------------------------------------------------------------------
@@ -1355,6 +1362,15 @@ function ResponsesView({ survey, onBack }) {
   const [responses, setResponses] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Detailed responses including answers. A table of answers can be shown
+  // when the user toggles `showAnswers`.
+  const [detailedResponses, setDetailedResponses] = useState([]);
+  const [showAnswers, setShowAnswers] = useState(false);
+
+  // Store full survey details including questions so we can render
+  // answer tables. Loaded once when the component mounts.
+  const [surveyDetails, setSurveyDetails] = useState(null);
+
   const loadResponses = useCallback(async () => {
     if (!survey?.id) return;
     
@@ -1370,9 +1386,39 @@ function ResponsesView({ survey, onBack }) {
     }
   }, [survey?.id]);
 
+  // Load detailed responses (answers) for this survey. We fetch them
+  // separately because the payload can be large. This is triggered when
+  // the component mounts and whenever the survey ID changes.
+  const loadDetailedResponses = useCallback(async () => {
+    if (!survey?.id) return;
+    try {
+      const result = await api.getDetailedResponses(survey.id);
+      if (result.success) {
+        setDetailedResponses(result.data);
+      }
+    } catch (error) {
+      console.error('Failed to load detailed responses:', error);
+    }
+  }, [survey?.id]);
+
+  // Load survey with questions to know column names for the answer table
+  const loadSurveyDetails = useCallback(async () => {
+    if (!survey?.id) return;
+    try {
+      const result = await api.getSurvey(survey.id);
+      if (result.success) {
+        setSurveyDetails(result.data);
+      }
+    } catch (error) {
+      console.error('Failed to load survey details:', error);
+    }
+  }, [survey?.id]);
+
   useEffect(() => {
     loadResponses();
-  }, [loadResponses]);
+    loadDetailedResponses();
+    loadSurveyDetails();
+  }, [loadResponses, loadDetailedResponses, loadSurveyDetails]);
 
   if (loading) {
     return (
@@ -1413,58 +1459,127 @@ function ResponsesView({ survey, onBack }) {
           <p className="text-gray-500">Responses will appear here once people start taking your survey</p>
         </div>
       ) : (
-        <div className="bg-white shadow rounded-lg overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Respondent
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Started
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Completed
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Answers
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {responses.map((response) => (
-                <tr key={response.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
-                      {response.respondent_name || response.respondent_email || 'Anonymous'}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                      response.is_complete 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-yellow-100 text-yellow-800'
-                    }`}>
-                      {response.is_complete ? 'Completed' : 'In Progress'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {new Date(response.started_at).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {response.completed_at ? new Date(response.completed_at).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {response.answer_count} answers
-                  </td>
+        <>
+          {/* Summary table of responses */}
+          <div className="bg-white shadow rounded-lg overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Respondent
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Started
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Completed
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Answers
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {responses.map((response) => (
+                  <tr key={response.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
+                        {response.respondent_name || response.respondent_email || 'Anonymous'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                        response.is_complete
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {response.is_complete ? 'Completed' : 'In Progress'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(response.started_at).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {response.completed_at ? new Date(response.completed_at).toLocaleString() : '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {response.answer_count} answers
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* Button to toggle detailed answers */}
+          <div className="mt-6">
+            <button
+              onClick={() => setShowAnswers(!showAnswers)}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700"
+            >
+              {showAnswers ? 'Hide Answers Table' : 'Show Answers Table'}
+            </button>
+          </div>
+          {/* Detailed answers table */}
+          {showAnswers && surveyDetails && detailedResponses.length > 0 && (
+            <div className="mt-6 overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Respondent
+                    </th>
+                    {surveyDetails.questions.map((q) => (
+                      <th
+                        key={q.id}
+                        className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
+                        {q.question_text.length > 20 ? q.question_text.slice(0, 20) + '…' : q.question_text}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {detailedResponses.map((resp) => (
+                    <tr key={resp.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700 font-medium">
+                        {resp.respondent_name || resp.respondent_email || 'Anonymous'}
+                      </td>
+                      {surveyDetails.questions.map((q) => {
+                        const ans = resp.answers?.find((a) => a.question_id === q.id);
+                        // Determine how to display the answer: selected_options as comma-separated, else answer_value or text
+                        let display = '';
+                        if (ans) {
+                          if (ans.selected_options && ans.selected_options.length > 0) {
+                            try {
+                              const opts = Array.isArray(ans.selected_options)
+                                ? ans.selected_options
+                                : JSON.parse(ans.selected_options);
+                              display = opts.join(', ');
+                            } catch (e) {
+                              display = ans.selected_options;
+                            }
+                          } else if (ans.answer_value) {
+                            display = ans.answer_value;
+                          } else if (ans.answer_text) {
+                            display = ans.answer_text;
+                          }
+                        }
+                        return (
+                          <td key={q.id} className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">
+                            {display || '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
