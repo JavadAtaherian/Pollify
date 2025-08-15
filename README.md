@@ -3,6 +3,8 @@
 **Pollify** is a full-stack survey platform that lets you build custom surveys with conditional logic, distribute them via public links or embed them, collect responses (with optional login), view results with charts and tables, and export data to CSV.  
 The backend is built with **Node.js/Express** and **PostgreSQL**, while the frontend is a **React** single-page application styled with **TailwindCSS**.
 
+https://github.com/JavadAtaherian/Pollify.git
+
 ---
 
 ## ✨ Features
@@ -82,6 +84,11 @@ Run frontend:
 cd client
 npm start
 ```
+Or run:
+```bash
+npm run dev
+```
+
 Frontend will be served at http://localhost:3000 and backend at http://localhost:5000
 
 ### 📊 Usage
@@ -101,3 +108,10 @@ Frontend will be served at http://localhost:3000 and backend at http://localhost
 - Database: PostgreSQL
 
 - Auth: JWT, PBKDF2 password hashing
+
+## Screenshots:
+![login](./screenshots/login.png)
+![dashboard](./screenshots/dashboard.png)
+![survey](./screenshots/survey.png)
+![surveyResults](./screenshots/surveyResults.png)
+![surveyBuilder](./screenshots/surveyBuilder.png)
