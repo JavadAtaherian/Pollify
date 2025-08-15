@@ -9,7 +9,13 @@ class SurveyResponse {
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
-    const result = await pool.query(query, [survey_id, respondent_id, respondent_email, ip_address, user_agent]);
+    const result = await pool.query(query, [
+      survey_id,
+      respondent_id,
+      respondent_email,
+      ip_address,
+      user_agent
+    ]);
     return result.rows[0];
   }
 

@@ -117,14 +117,15 @@ router.get('/survey/:survey_id/export', async (req, res) => {
     }
     // Load detailed responses including answers
     const responses = await SurveyResponse.findDetailedBySurvey(surveyId);
-    // Generate CSV header: fixed respondent fields + question texts
+    // Generate CSV header: fixed respondent fields + question texts and response times
+    // Each question produces two columns: answer value and timestamp
     const header = [
-      'Respondent Name',
+      'Respondent',
       'Respondent Email',
       'Started At',
       'Completed At',
       'Status',
-      ...survey.questions.map((q) => q.question_text)
+      ...survey.questions.flatMap((q) => [q.question_text, `${q.question_text} - Time`])
     ];
     // Helper to escape CSV values
     const escapeCsv = (value) => {
@@ -144,11 +145,13 @@ router.get('/survey/:survey_id/export', async (req, res) => {
       row.push(resp.started_at);
       row.push(resp.completed_at || '');
       row.push(resp.is_complete ? 'Completed' : 'In Progress');
-      // Answers per question (in order)
+      // Answers per question (in order): push both the value and the timestamp
       survey.questions.forEach((q) => {
         const ans = resp.answers?.find((a) => a.question_id === q.id);
         let val = '';
+        let time = '';
         if (ans) {
+          // Determine answer value
           if (ans.selected_options && ans.selected_options.length > 0) {
             try {
               const opts = Array.isArray(ans.selected_options)
@@ -163,8 +166,11 @@ router.get('/survey/:survey_id/export', async (req, res) => {
           } else if (ans.answer_text) {
             val = ans.answer_text;
           }
+          // Response timestamp
+          time = ans.created_at || '';
         }
         row.push(val);
+        row.push(time);
       });
       return row;
     });
