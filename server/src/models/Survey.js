@@ -21,10 +21,13 @@ class Survey {
 
   static async findByCreator(creator_id) {
     const query = `
-      SELECT s.*, u.name as creator_name 
-      FROM surveys s 
-      JOIN users u ON s.creator_id = u.id 
-      WHERE s.creator_id = $1 
+      SELECT s.*, u.name as creator_name,
+             COALESCE(COUNT(sr.id), 0) AS response_count
+      FROM surveys s
+      JOIN users u ON s.creator_id = u.id
+      LEFT JOIN survey_responses sr ON sr.survey_id = s.id
+      WHERE s.creator_id = $1
+      GROUP BY s.id, u.name
       ORDER BY s.created_at DESC
     `;
     const result = await pool.query(query, [creator_id]);

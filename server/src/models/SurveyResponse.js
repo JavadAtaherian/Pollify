@@ -98,7 +98,8 @@ class SurveyResponse {
                    'question_id', qa.question_id,
                    'answer_text', qa.answer_text,
                    'answer_value', qa.answer_value,
-                   'selected_options', qa.selected_options
+                   'selected_options', qa.selected_options,
+                   'created_at', qa.created_at
                  ) ORDER BY qa.question_id
                ) FILTER (WHERE qa.id IS NOT NULL),
                '[]'::json

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Edit, Trash2, Users, BarChart3, Settings, Home, PlusCircle, Sliders, Link as LinkIcon } from 'lucide-react';
 
 // API Base URL
@@ -577,13 +577,15 @@ function SurveyCard({ survey, onEdit, onViewResponses, onDelete }) {
         <div className="mt-4 flex items-center justify-between">
           <div className="flex items-center text-sm text-gray-500">
             <Users className="w-4 h-4 mr-1" />
-            <span>0 responses</span>
+            <span>
+              {survey.response_count || 0} {survey.response_count === 1 ? 'response' : 'responses'}
+            </span>
           </div>
-          <div className={`px-2 py-1 text-xs font-medium rounded-full ${
-            survey.is_active 
-              ? 'bg-green-100 text-green-800' 
-              : 'bg-gray-100 text-gray-800'
-          }`}>
+          <div
+            className={`px-2 py-1 text-xs font-medium rounded-full ${
+              survey.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+            }`}
+          >
             {survey.is_active ? 'Active' : 'Draft'}
           </div>
         </div>
@@ -1367,6 +1369,11 @@ function ResponsesView({ survey, onBack }) {
   const [detailedResponses, setDetailedResponses] = useState([]);
   const [showAnswers, setShowAnswers] = useState(false);
 
+  // When enabled, displays aggregated results for each question as simple
+  // bar charts. Chart data is computed from `detailedResponses` and
+  // `surveyDetails`.
+  const [showCharts, setShowCharts] = useState(false);
+
   // Store full survey details including questions so we can render
   // answer tables. Loaded once when the component mounts.
   const [surveyDetails, setSurveyDetails] = useState(null);
@@ -1419,6 +1426,84 @@ function ResponsesView({ survey, onBack }) {
     loadDetailedResponses();
     loadSurveyDetails();
   }, [loadResponses, loadDetailedResponses, loadSurveyDetails]);
+
+  // Compute chart data based on responses. This memoized function processes
+  // answers for each question and returns an array of objects with label
+  // counts. It recomputes when the list of detailed responses or survey
+  // details changes. Only questions with discrete answer values (choices,
+  // ratings, scales or numbers) are processed.
+  const chartsData = useMemo(() => {
+    if (!surveyDetails || detailedResponses.length === 0) return [];
+    const total = detailedResponses.length;
+    const result = [];
+
+    surveyDetails.questions.forEach((q) => {
+      // Define which question types support charting
+      const chartableTypes = ['radio', 'checkbox', 'dropdown', 'rating', 'scale', 'number'];
+      if (!chartableTypes.includes(q.question_type)) {
+        return;
+      }
+      const counts = new Map();
+      detailedResponses.forEach((resp) => {
+        const ans = resp.answers?.find((a) => a.question_id === q.id);
+        if (!ans) return;
+        // For checkbox questions, selected_options may be JSON string or array
+        if (q.question_type === 'checkbox') {
+          let optionsArray = [];
+          if (ans.selected_options) {
+            if (Array.isArray(ans.selected_options)) {
+              optionsArray = ans.selected_options;
+            } else {
+              try {
+                optionsArray = JSON.parse(ans.selected_options);
+              } catch (e) {
+                // fallback treat as comma-separated string
+                optionsArray = String(ans.selected_options).split(',').map((s) => s.trim());
+              }
+            }
+          }
+          optionsArray.forEach((opt) => {
+            const key = String(opt);
+            counts.set(key, (counts.get(key) || 0) + 1);
+          });
+        } else {
+          // For other types, use answer_value if present, otherwise answer_text
+          let value = ans.answer_value;
+          if (value === null || value === undefined || value === '') {
+            value = ans.answer_text;
+          }
+          if (value !== null && value !== undefined && value !== '') {
+            const key = String(value);
+            counts.set(key, (counts.get(key) || 0) + 1);
+          }
+        }
+      });
+      // For choice questions, ensure that all defined options appear, even if zero responses
+      const data = [];
+      if (q.options && q.options.length > 0) {
+        q.options.forEach((opt) => {
+          const key = String(opt.value);
+          const label = opt.text;
+          const count = counts.get(key) || 0;
+          data.push({ label, count });
+        });
+      } else {
+        // For rating/scale/number, sort keys numerically if possible
+        Array.from(counts.keys())
+          .sort((a, b) => {
+            const na = Number(a);
+            const nb = Number(b);
+            if (!isNaN(na) && !isNaN(nb)) return na - nb;
+            return String(a).localeCompare(String(b));
+          })
+          .forEach((key) => {
+            data.push({ label: String(key), count: counts.get(key) || 0 });
+          });
+      }
+      result.push({ question: q, data, total });
+    });
+    return result;
+  }, [surveyDetails, detailedResponses]);
 
   if (loading) {
     return (
@@ -1513,13 +1598,19 @@ function ResponsesView({ survey, onBack }) {
               </tbody>
             </table>
           </div>
-          {/* Button to toggle detailed answers */}
-          <div className="mt-6">
+          {/* Button group to toggle answers and charts */}
+          <div className="mt-6 flex space-x-4">
             <button
               onClick={() => setShowAnswers(!showAnswers)}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700"
             >
               {showAnswers ? 'Hide Answers Table' : 'Show Answers Table'}
+            </button>
+            <button
+              onClick={() => setShowCharts(!showCharts)}
+              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700"
+            >
+              {showCharts ? 'Hide Charts' : 'Show Charts'}
             </button>
           </div>
           {/* Detailed answers table */}
@@ -1551,7 +1642,9 @@ function ResponsesView({ survey, onBack }) {
                         const ans = resp.answers?.find((a) => a.question_id === q.id);
                         // Determine how to display the answer: selected_options as comma-separated, else answer_value or text
                         let display = '';
+                        let timeStr = '';
                         if (ans) {
+                          // format answer based on type
                           if (ans.selected_options && ans.selected_options.length > 0) {
                             try {
                               const opts = Array.isArray(ans.selected_options)
@@ -1566,10 +1659,23 @@ function ResponsesView({ survey, onBack }) {
                           } else if (ans.answer_text) {
                             display = ans.answer_text;
                           }
+                          if (ans.created_at) {
+                            try {
+                              const d = new Date(ans.created_at);
+                              timeStr = d.toLocaleString();
+                            } catch (e) {
+                              timeStr = ans.created_at;
+                            }
+                          }
                         }
                         return (
                           <td key={q.id} className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">
                             {display || '-'}
+                            {timeStr && (
+                              <div className="text-xs text-gray-400 mt-1">
+                                {timeStr}
+                              </div>
+                            )}
                           </td>
                         );
                       })}
@@ -1577,6 +1683,39 @@ function ResponsesView({ survey, onBack }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {/* Charts view */}
+          {showCharts && chartsData.length > 0 && (
+            <div className="mt-6 space-y-8">
+              {chartsData.map((chart) => (
+                <div key={chart.question.id}>
+                  <h4 className="text-md font-medium text-gray-800 mb-2">
+                    {chart.question.question_text}
+                  </h4>
+                  <div className="space-y-2">
+                    {chart.data.map((item) => {
+                      const percentage = chart.total > 0 ? (item.count / chart.total) * 100 : 0;
+                      return (
+                        <div key={item.label} className="flex items-center">
+                          <span className="w-32 text-sm text-gray-600 truncate pr-2">
+                            {item.label}
+                          </span>
+                          <div className="flex-1 bg-gray-200 h-4 rounded relative">
+                            <div
+                              className="bg-green-500 h-4 rounded"
+                              style={{ width: `${percentage}%` }}
+                            ></div>
+                          </div>
+                          <span className="ml-2 text-sm text-gray-600">
+                            {item.count}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </>
